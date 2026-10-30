@@ -1,5 +1,6 @@
 package com.shubham.featureflagplatform.cache;
 
+import com.shubham.featureflagplatform.config.CacheProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
