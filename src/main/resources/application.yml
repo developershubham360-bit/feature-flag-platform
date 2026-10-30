@@ -12,6 +12,15 @@ spring:
         properties:
             hibernate:
                 format_sql: true
+    data:
+       redis:
+            host: localhost
+            port: 6379
+
+app:
+    cache:
+        flag-ttl-seconds: 300
+        negative-ttl-seconds: 30
 
 management:
     endpoints:
