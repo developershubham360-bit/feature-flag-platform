@@ -2,12 +2,19 @@ package com.shubham.featureflagplatform.flag;
 
 import com.shubham.featureflagplatform.audit.AuditLog;
 import com.shubham.featureflagplatform.audit.AuditLogRepository;
+import com.shubham.featureflagplatform.cache.CachedFlag;
 import com.shubham.featureflagplatform.cache.FlagCache;
+import com.shubham.featureflagplatform.cache.LocalFlagCache;
 import com.shubham.featureflagplatform.error.FlagNotFoundException;
+import com.shubham.featureflagplatform.event.ChangeType;
+import com.shubham.featureflagplatform.event.FlagChangedEvent;
+import com.shubham.featureflagplatform.event.FlagSnapshot;
+import com.shubham.featureflagplatform.event.RuleSnapshot;
 import com.shubham.featureflagplatform.flag.dto.CreateFlagRequest;
 import com.shubham.featureflagplatform.flag.dto.FlagDto;
 import com.shubham.featureflagplatform.flag.dto.TargetingRuleDto;
 import com.shubham.featureflagplatform.flag.dto.UpdateFlagRequest;
+import com.shubham.featureflagplatform.outbox.FlagEventOutbox;
 import com.shubham.featureflagplatform.targeting.TargetingRule;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,6 +23,7 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 public class FlagService {
@@ -23,12 +31,16 @@ public class FlagService {
     private final FlagRepository flagRepository;
     private final AuditLogRepository auditLogRepository;
     private final FlagCache flagCache;
+    private final LocalFlagCache localFlagCache;
+    private final FlagEventOutbox outbox;
 
     public FlagService(FlagRepository flagRepository, AuditLogRepository auditLogRepository,
-                       FlagCache flagCache) {
+                       FlagCache flagCache, LocalFlagCache localFlagCache, FlagEventOutbox outbox) {
         this.flagRepository = flagRepository;
         this.auditLogRepository = auditLogRepository;
         this.flagCache = flagCache;
+        this.localFlagCache = localFlagCache;
+        this.outbox = outbox;
     }
 
     @Transactional(readOnly = true)
@@ -46,11 +58,9 @@ public class FlagService {
         Flag flag = new Flag(req.key(), req.environment(), req.name(),
                 req.description(), req.enabled(), req.rolloutPercentage());
         flag.setTargetingRules(toEntityRules(req.targetingRules()));
-        Flag saved = flagRepository.save(flag);
+        Flag saved = flagRepository.save(flag);   
         audit(saved.getKey(), saved.getEnvironment(), "CREATE", "admin");
-        // Clears any negative ("not found") entry an earlier /evaluate may have cached,
-        // so the new flag becomes visible immediately after commit.
-        evictAfterCommit(saved.getEnvironment(), saved.getKey());
+        publish(saved, ChangeType.CREATED);
         return toDto(saved);
     }
 
@@ -62,43 +72,59 @@ public class FlagService {
         flag.setEnabled(req.enabled());
         flag.setRolloutPercentage(req.rolloutPercentage());
         flag.setTargetingRules(toEntityRules(req.targetingRules()));
-        flag.setVersion(flag.getVersion() + 1);
         flag.setUpdatedAt(Instant.now());
-        // no explicit save() needed — dirty checking flushes on commit
+        flagRepository.flush();
         audit(flag.getKey(), flag.getEnvironment(), "UPDATE", "admin");
-        evictAfterCommit(flag.getEnvironment(), flag.getKey());
+        publish(flag, ChangeType.UPDATED);
         return toDto(flag);
     }
 
     @Transactional
     public void delete(Long id) {
         Flag flag = getOrThrow(id);
-        flagRepository.delete(flag);
+        flagRepository.delete(flag);              
         audit(flag.getKey(), flag.getEnvironment(), "DELETE", "admin");
-        evictAfterCommit(flag.getEnvironment(), flag.getKey());
+        publish(flag, ChangeType.DELETED);
     }
 
-    /**
-     * Evict the cache entry ONLY after this transaction commits.
-     *
-     * If we evicted inline (before commit), a concurrent /evaluate could miss the cache,
-     * read the still-uncommitted OLD value from Postgres, and repopulate Redis with stale
-     * data that then sticks until the TTL. Registering an afterCommit() callback guarantees
-     * the eviction fires only once the new value is durable, so any later read repopulates
-     * from fresh data.
-     */
-    private void evictAfterCommit(String environment, String key) {
+    private void publish(Flag flag, ChangeType type) {
+        FlagChangedEvent event = toEvent(flag, type);
+        outbox.append(event);
+
+        String env = flag.getEnvironment();
+        String key = flag.getKey();
+        CachedFlag local = CachedFlag.from(event);
+        afterCommit(() -> {
+            flagCache.evict(env, key);
+            localFlagCache.merge(env, key, local);
+        });
+    }
+
+    private void afterCommit(Runnable action) {
         if (TransactionSynchronizationManager.isSynchronizationActive()) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCommit() {
-                    flagCache.evict(environment, key);
+                    action.run();
                 }
             });
         } else {
-            // Defensive: no active transaction (e.g. called outside @Transactional) — evict now.
-            flagCache.evict(environment, key);
+            action.run();
         }
+    }
+
+    private FlagChangedEvent toEvent(Flag flag, ChangeType type) {
+        if (type == ChangeType.DELETED) {
+            // Tombstone: version + 1 beats every earlier snapshot of this row.
+            return new FlagChangedEvent(UUID.randomUUID(), flag.getId(), flag.getKey(),
+                    flag.getEnvironment(), flag.getVersion() + 1, type, Instant.now(), null);
+        }
+        List<RuleSnapshot> rules = flag.getTargetingRules().stream()
+                .map(r -> new RuleSnapshot(r.getAttribute(), r.getOperator(), r.getValue()))
+                .toList();
+        FlagSnapshot snapshot = new FlagSnapshot(flag.isEnabled(), flag.getRolloutPercentage(), rules);
+        return new FlagChangedEvent(UUID.randomUUID(), flag.getId(), flag.getKey(),
+                flag.getEnvironment(), flag.getVersion(), type, Instant.now(), snapshot);
     }
 
     private Flag getOrThrow(Long id) {
