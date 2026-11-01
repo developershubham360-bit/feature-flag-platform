@@ -8,5 +8,7 @@ public record CacheProperties (
 
     @DefaultValue("300") int flagTtlSeconds,
 
-    @DefaultValue("30") int negativeTtlSeconds
+    @DefaultValue("30") int negativeTtlSeconds, 
+
+    @DefaultValue("60") int localTtlSeconds
 ) {}
