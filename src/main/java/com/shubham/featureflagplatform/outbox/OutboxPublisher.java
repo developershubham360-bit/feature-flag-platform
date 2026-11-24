@@ -39,6 +39,9 @@ public class OutboxPublisher {
             }
             sent.add(row.getId());
         }
+        if (!sent.isEmpty()) {
+            outboxRepository.deleteAllByIdInBatch(sent);
+        }
     }
 
     private boolean send(OutboxEvent row) {
