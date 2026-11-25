@@ -26,7 +26,7 @@ class FlagCacheTest {
 
     @BeforeEach
     void setUp() {
-        cache = new FlagCache(redis, new CacheProperties(300, 30));
+        cache = new FlagCache(redis, new CacheProperties(300, 30, 60));
     }
 
     @Test
@@ -40,7 +40,7 @@ class FlagCacheTest {
     @Test
     void put_usesFlagTtl_andCorrectKey() {
         when(redis.opsForValue()).thenReturn(valueOps);
-        CachedFlag value = new CachedFlag(true, true, 50, List.of(), 1);
+        CachedFlag value = new CachedFlag(1, true, true, 50, List.of(), 1);
 
         cache.put("prod", "checkout-v2", value);
 

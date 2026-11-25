@@ -8,7 +8,7 @@ spring:
     jpa: 
         hibernate:
             ddl-auto: update
-        show-sql: true
+        show-sql: false
         properties:
             hibernate:
                 format_sql: true
@@ -16,12 +16,30 @@ spring:
        redis:
             host: localhost
             port: 6379
+    kafka:
+        bootstrap-servers: localhost:9092
+        producer:
+            acks: all
+            properties:
+                enable.idempotence: true
+                max.block.ms: 5000
+                request.timeout.ms: 5000
+                delivery.timeout.ms: 10000
+        consumer:
+            auto-offset-reset: latest
 
 app:
     cache:
         flag-ttl-seconds: 300
         negative-ttl-seconds: 30
-
+        local-ttl-seconds: 60
+    propagation:
+        topic: flag-changes
+        partitions: 3
+        outbox-poll-interval-ms: 500
+        outbox-batch-size: 100
+        send-timeout-ms: 10000
+        replay-window-seconds: 60
 management:
     endpoints:
         web:

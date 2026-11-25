@@ -17,6 +17,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
+import jakarta.persistence.Version;
 
 @Entity 
 @Table (
@@ -50,6 +51,7 @@ public class Flag {
     )
     private List<TargetingRule> targetingRules = new ArrayList<>();
 
+    @Version
     @Column (nullable = false)
     private long version;
 
@@ -89,7 +91,6 @@ public class Flag {
     public void setDescription(String description) { this.description = description; }
     public void setRolloutPercentage(int rolloutPercentage) { this.rolloutPercentage = rolloutPercentage; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
-    public void setVersion(long version) { this.version = version; }
     public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 
     public void setTargetingRules(List<TargetingRule> targetingRules) {
